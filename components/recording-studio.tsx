@@ -23,6 +23,7 @@ export function RecordingStudio() {
   const [playingRecordingId, setPlayingRecordingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [micPermissionGranted, setMicPermissionGranted] = useState(false)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -35,15 +36,6 @@ export function RecordingStudio() {
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
-    audioElementRef.current = new Audio()
-    audioElementRef.current.addEventListener("ended", () => {
-      console.log("[v0] Playback ended")
-      setIsPlaying(false)
-      setPlayingRecordingId(null)
-      setCurrentTime(0)
-      if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
-    })
-
     // Check if browser supports getUserMedia
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setError("Your browser does not support audio recording")
@@ -51,11 +43,37 @@ export function RecordingStudio() {
     }
 
     return () => {
-      if (audioElementRef.current) {
-        audioElementRef.current.removeEventListener("ended", () => {})
-      }
       if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current)
       if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (audioElementRef.current) {
+      const handleEnded = () => {
+        console.log("[v0] Playback ended")
+        setIsPlaying(false)
+        setPlayingRecordingId(null)
+        setCurrentTime(0)
+        if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
+      }
+
+      const handleError = (e: Event) => {
+        const audio = e.target as HTMLAudioElement
+        console.error("[v0] Audio playback error:", audio.error)
+        setError(`Audio playback error: ${audio.error?.message}`)
+        setIsPlaying(false)
+      }
+
+      audioElementRef.current.addEventListener("ended", handleEnded)
+      audioElementRef.current.addEventListener("error", handleError)
+
+      return () => {
+        if (audioElementRef.current) {
+          audioElementRef.current.removeEventListener("ended", handleEnded)
+          audioElementRef.current.removeEventListener("error", handleError)
+        }
+      }
     }
   }, [])
 
@@ -108,18 +126,26 @@ export function RecordingStudio() {
         throw new Error("MediaRecorder is not supported in your browser")
       }
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm;codecs=opus",
-      })
+      let mimeType = "audio/webm;codecs=opus"
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        console.log("[v0] Fallback from webm/opus to webm")
+        mimeType = "audio/webm"
+      }
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        console.log("[v0] Fallback from webm to default")
+        mimeType = ""
+      }
 
-      console.log("[v0] MediaRecorder created, state:", mediaRecorder.state)
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+
+      console.log("[v0] MediaRecorder created with mimeType:", mimeType, "state:", mediaRecorder.state)
       mediaRecorderRef.current = mediaRecorder
       chunksRef.current = []
       recordingStartTimeRef.current = Date.now()
       setRecordingTime(0)
 
       mediaRecorder.ondataavailable = (e) => {
-        console.log("[v0] Data available, chunk size:", e.data.size)
+        console.log("[v0] Data available, chunk size:", e.data.size, "chunks total:", chunksRef.current.length + 1)
         if (e.data.size > 0) {
           chunksRef.current.push(e.data)
         }
@@ -127,8 +153,23 @@ export function RecordingStudio() {
 
       mediaRecorder.onstop = () => {
         console.log("[v0] Recording stopped, total chunks:", chunksRef.current.length)
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" })
-        console.log("[v0] Blob created, size:", blob.size)
+        if (chunksRef.current.length === 0) {
+          console.error("[v0] ERROR: No audio chunks captured!")
+          setError("Recording failed: No audio was captured. Please try again.")
+          setIsRecording(false)
+          return
+        }
+
+        const blobMimeType = mimeType || "audio/webm"
+        const blob = new Blob(chunksRef.current, { type: blobMimeType })
+        console.log("[v0] Blob created, size:", blob.size, "type:", blobMimeType)
+
+        if (blob.size === 0) {
+          console.error("[v0] ERROR: Blob is empty!")
+          setError("Recording failed: No audio data was captured.")
+          setIsRecording(false)
+          return
+        }
 
         const duration = recordingTime
         const recording: Recording = {
@@ -139,8 +180,16 @@ export function RecordingStudio() {
           timestamp: Date.now(),
         }
 
-        console.log("[v0] Recording saved:", recording.name, "Duration:", duration)
+        console.log(
+          "[v0] Recording saved successfully:",
+          recording.name,
+          "Duration:",
+          duration,
+          "Blob size:",
+          blob.size,
+        )
         setRecordings((prev) => [recording, ...prev])
+        setError(null)
 
         stream.getTracks().forEach((track) => {
           console.log("[v0] Stopping track:", track.kind)
@@ -154,20 +203,20 @@ export function RecordingStudio() {
         setIsRecording(false)
       }
 
-      console.log("[v0] Starting MediaRecorder")
-      mediaRecorder.start(100) // Collect data every 100ms
+      console.log("[v0] Starting MediaRecorder, will request data every 100ms")
+      mediaRecorder.start(100)
       setIsRecording(true)
-      console.log("[v0] Recording started successfully")
+      console.log("[v0] Recording started successfully, state:", mediaRecorder.state)
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error"
       console.error("[v0] Error accessing microphone:", errorMessage, error)
 
-      if (errorMessage.includes("NotAllowedError")) {
-        setError("Microphone permission denied. Please check your browser settings.")
+      if (errorMessage.includes("NotAllowedError") || errorMessage.includes("Permission denied")) {
+        setError("Microphone permission denied. Please allow microphone access in your browser settings and reload.")
       } else if (errorMessage.includes("NotFoundError")) {
         setError("No microphone found. Please connect a microphone and try again.")
       } else if (errorMessage.includes("NotReadableError")) {
-        setError("Microphone is already in use by another application.")
+        setError("Microphone is already in use by another application. Please close other apps using the mic.")
       } else {
         setError(`Failed to access microphone: ${errorMessage}`)
       }
@@ -179,34 +228,49 @@ export function RecordingStudio() {
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
       console.log("[v0] Stopping recording, MediaRecorder state:", mediaRecorderRef.current.state)
-      mediaRecorderRef.current.stop()
+      if (mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop()
+      }
       setIsRecording(false)
-      console.log("[v0] Recording stop called")
+      console.log("[v0] Recording stop called, state now:", mediaRecorderRef.current.state)
     }
   }
 
   const playRecording = (recording: Recording) => {
-    if (audioElementRef.current && recording) {
-      try {
-        console.log("[v0] Playing recording:", recording.name)
-        const url = URL.createObjectURL(recording.blob)
+    try {
+      console.log("[v0] Playing recording:", recording.name)
+      console.log("[v0] Blob details - size:", recording.blob.size, "type:", recording.blob.type)
+
+      const url = URL.createObjectURL(recording.blob)
+      console.log("[v0] Object URL created:", url)
+
+      if (audioElementRef.current) {
         audioElementRef.current.src = url
-        audioElementRef.current.play()
-        setIsPlaying(true)
-        setPlayingRecordingId(recording.id)
-        setDuration(recording.duration)
-        setCurrentTime(0)
+        console.log("[v0] Audio src set")
 
-        if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
-        playbackIntervalRef.current = setInterval(() => {
-          setCurrentTime(audioElementRef.current?.currentTime || 0)
-        }, 100)
-
-        console.log("[v0] Playback started")
-      } catch (err) {
-        console.error("[v0] Error playing recording:", err)
-        setError("Failed to play recording")
+        audioElementRef.current.play().catch((err) => {
+          console.error("[v0] Play error:", err)
+          setError(`Playback failed: ${err.message}`)
+        })
       }
+
+      setAudioUrl(url)
+      setIsPlaying(true)
+      setPlayingRecordingId(recording.id)
+      setDuration(recording.duration)
+      setCurrentTime(0)
+
+      if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
+      playbackIntervalRef.current = setInterval(() => {
+        if (audioElementRef.current) {
+          setCurrentTime(audioElementRef.current.currentTime)
+        }
+      }, 100)
+
+      console.log("[v0] Playback started")
+    } catch (err) {
+      console.error("[v0] Error playing recording:", err)
+      setError("Failed to play recording")
     }
   }
 
@@ -265,6 +329,8 @@ export function RecordingStudio() {
           <div className="bg-red-500/20 border border-red-500/50 rounded-xl p-4 mb-8 text-red-300">{error}</div>
         )}
 
+        <audio ref={audioElementRef} crossOrigin="anonymous" style={{ display: "none" }} />
+
         {/* Recording Section */}
         <div className="bg-gradient-to-br from-purple-900/50 to-slate-900/50 backdrop-blur-md border border-purple-500/30 rounded-3xl p-8 md:p-12 mb-8 shadow-2xl">
           {/* Waveform Visualizer */}
@@ -289,6 +355,15 @@ export function RecordingStudio() {
                 <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
                 <span className="text-red-300 text-sm font-semibold">Recording...</span>
               </div>
+            </div>
+          )}
+
+          {/* Microphone Levels Hint */}
+          {isRecording && (
+            <div className="text-center mb-6 px-4 py-2 bg-blue-500/20 border border-blue-500/50 rounded-lg">
+              <p className="text-blue-300 text-sm">
+                Sing or speak into your microphone. You should see movement in the waveform above.
+              </p>
             </div>
           )}
 
@@ -321,7 +396,7 @@ export function RecordingStudio() {
                 <div className="flex-1 bg-slate-700 rounded-full h-2 mx-4">
                   <div
                     className="bg-gradient-to-r from-blue-400 to-purple-400 h-2 rounded-full transition-all duration-100"
-                    style={{ width: `${(currentTime / duration) * 100}%` }}
+                    style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
                   />
                 </div>
                 <span className="text-purple-300">{formatTime(duration)}</span>
