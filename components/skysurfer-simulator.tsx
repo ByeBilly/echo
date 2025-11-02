@@ -1,6 +1,9 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { GoogleMapOverlay } from "./google-map-overlay"
+import { MapSearchControls } from "./map-search-controls"
+import { useRef as useExternalRef } from "react-google-maps"
 
 export interface Vehicle {
   id: string
@@ -48,7 +51,13 @@ interface FlightState {
 }
 
 export function SkySurferSimulator({ onSessionEnd }: { onSessionEnd?: (data: any) => void }) {
-  const [selectedLocation, setSelectedLocation] = useState({ lat: 40.7128, lng: -74.006, name: "New York" })
+  const [selectedLocation, setSelectedLocation] = useState({
+    lat: 40.7128,
+    lng: -74.006,
+    zoom: 16,
+    name: "New York, USA",
+  })
+  const [mapType, setMapType] = useState<"satellite" | "roadmap">("satellite")
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle>(VEHICLES[0])
   const [isFlying, setIsFlying] = useState(false)
   const [showMenu, setShowMenu] = useState(true)
@@ -72,12 +81,13 @@ export function SkySurferSimulator({ onSessionEnd }: { onSessionEnd?: (data: any
     distance: number
   }>({
     startTime: 0,
-    location: "New York",
+    location: "New York, USA",
     vehicle: "Sport Racer",
     maxAltitude: 0,
     maxSpeed: 0,
     distance: 0,
   })
+  const mapContainerRef = useExternalRef(null)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -271,11 +281,30 @@ export function SkySurferSimulator({ onSessionEnd }: { onSessionEnd?: (data: any
     setIsFlying(!isFlying)
   }
 
+  const handleLocationChange = (newLocation: { lat: number; lng: number; zoom: number; name: string }) => {
+    setSelectedLocation(newLocation)
+    console.log("[v0] Location changed to:", newLocation)
+  }
+
   const state = flightState.current
 
   return (
     <div className="relative w-full h-screen overflow-hidden">
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-screen" />
+      <GoogleMapOverlay
+        position={{ lat: selectedLocation.lat, lng: selectedLocation.lng, zoom: selectedLocation.zoom }}
+        mapType={mapType}
+        containerRef={mapContainerRef}
+      />
+
+      {/* Canvas for flight visualization - overlayed on map */}
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-screen pointer-events-none" />
+
+      <MapSearchControls
+        onLocationChange={handleLocationChange}
+        currentLocation={selectedLocation}
+        mapType={mapType}
+        onMapTypeChange={setMapType}
+      />
 
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-0 left-0 right-0 bg-black/30 text-white p-4">
@@ -357,11 +386,11 @@ export function SkySurferSimulator({ onSessionEnd }: { onSessionEnd?: (data: any
             <h3 className="text-lg font-bold mb-3">Location</h3>
             <div className="space-y-2">
               {[
-                { name: "New York", lat: 40.7128, lng: -74.006 },
-                { name: "Los Angeles", lat: 34.0522, lng: -118.2437 },
-                { name: "Tokyo", lat: 35.6762, lng: 139.6503 },
-                { name: "London", lat: 51.5074, lng: -0.1278 },
-                { name: "Paris", lat: 48.8566, lng: 2.3522 },
+                { name: "New York, USA", lat: 40.7128, lng: -74.006 },
+                { name: "Los Angeles, USA", lat: 34.0522, lng: -118.2437 },
+                { name: "Tokyo, Japan", lat: 35.6762, lng: 139.6503 },
+                { name: "London, UK", lat: 51.5074, lng: -0.1278 },
+                { name: "Paris, France", lat: 48.8566, lng: 2.3522 },
               ].map((loc) => (
                 <button
                   key={loc.name}
@@ -370,6 +399,7 @@ export function SkySurferSimulator({ onSessionEnd }: { onSessionEnd?: (data: any
                       name: loc.name,
                       lat: loc.lat,
                       lng: loc.lng,
+                      zoom: 16,
                     })
                   }
                   className={`w-full text-left p-3 rounded-lg ${
