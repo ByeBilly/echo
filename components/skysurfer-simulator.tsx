@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react"
 import { GoogleMapOverlay } from "./google-map-overlay"
 import { MapSearchControls } from "./map-search-controls"
-import { useRef as useExternalRef } from "react-google-maps"
 
 export interface Vehicle {
   id: string
@@ -87,7 +86,7 @@ export function SkySurferSimulator({ onSessionEnd }: { onSessionEnd?: (data: any
     maxSpeed: 0,
     distance: 0,
   })
-  const mapContainerRef = useExternalRef(null)
+  const mapContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
